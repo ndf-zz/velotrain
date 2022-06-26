@@ -1,0 +1,13 @@
+[Unit]
+Description=Velodrome Transponder Training
+Wants=time-sync.target
+After=time-sync.target
+
+[Service]
+Type=simple
+ExecStart=velotrain
+User=velotrain
+WorkingDirectory=~
+
+[Install]
+WantedBy=multi-user.target
