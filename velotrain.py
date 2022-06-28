@@ -18,10 +18,11 @@ from metarace import jsonconfig
 from metarace.telegraph import telegraph
 from libscrc import mcrf4xx
 
+_LOGLEVEL = logging.INFO
 _log = logging.getLogger('velotrain')
-_log.setLevel(logging.DEBUG)
+_log.setLevel(_LOGLEVEL)
 _hlog = logging.getLogger('velotrain.hub')
-_hlog.setLevel(logging.DEBUG)
+_hlog.setLevel(_LOGLEVEL)
 
 # optional configuration override file
 _CONFIGFILE = 'velotrain.json'
@@ -832,17 +833,17 @@ class app(object):
         # Enable sync master, if set
         if isinstance(self._cf['sync'], str) and self._cf['sync'] in self._mps:
             self._syncmaster = self._cf['sync']
-            _log.debug('Enabled %r:%r as sync master', self._syncmaster,
+            _log.info('Enabled %s:%s as sync master', self._syncmaster,
                        self._mps[self._syncmaster])
         else:
-            _log.warning('Sync master not configured (%r)', self._cf['sync'])
+            _log.warning('Sync master not configured (%s)', self._cf['sync'])
 
         # Allocate the top-of-minute trigger source
         self._tomsrc = None
         for mp in self._mps:
             if mp != self._syncmaster:
                 self._tomsrc = mp
-                _log.info('Using %r for top-of-minute trigger', mp)
+                _log.info('Using %s for top-of-minute trigger', mp)
                 break
         if self._tomsrc is None:
             raise RuntimeError(
@@ -1043,7 +1044,7 @@ class app(object):
                              endmp)
         else:
             _log.debug('Gate split mp %r not configured', startmp)
-        _log.debug('Configured %s splits: %r', len(self._secmap),
+        _log.info('Configured %s splits: %r', len(self._secmap),
                    ', '.join(sorted(self._secmap)))
 
     def _reqstatus(self):
@@ -1061,7 +1062,7 @@ class app(object):
             'gate': gtime,
             'units': [],
         }
-        slog = ['Count:{} Offset:{}'.format(len(self._pstore), str(self._offset)) ]
+        slog = ['Status Count:{} Offset:{}'.format(len(self._pstore), str(self._offset)) ]
         for d in self._mps:
             mpid = strops.chan2id(d)
             cname = self._mpnames[d]
@@ -1300,7 +1301,7 @@ class app(object):
             _log.info('Clear/Reset already in progress')
             return False
         try:
-            _log.debug('Clear history')
+            _log.info('Clear passing history')
             self._resetting = True
             # clear passing index & reset data structures
             self._pstore = []
@@ -1320,7 +1321,7 @@ class app(object):
             _log.info('Clear/Reset already in progress')
             return False
         try:
-            _log.debug('Starting reset procedure')
+            _log.info('Starting reset procedure, operation paused')
             self._resetting = True
             # stop & reset all attached decoders to home state
             for mp in self._mps:
@@ -1349,7 +1350,7 @@ class app(object):
             nt = tod.tod(60 + 60 * (int(tod.now().as_seconds()) // 60))
             (hr, mn, sc) = nt.rawtime(0, zeros=True, hoursep=':',
                                       minsep=':').split(':')
-            _log.debug('Reset sync time: %r hrs %r min %r sec', hr, mn, sc)
+            _log.info('Reset sync time: %r hrs %r min %r sec', hr, mn, sc)
 
             # set sync time on all slaved decoders
             confchg = {
@@ -1366,7 +1367,7 @@ class app(object):
             if self._syncmaster is not None:
                 d = self._mps[self._syncmaster]
                 # prepare sync master
-                _log.debug('Sarting sync master %r:%r', self._syncmaster, d)
+                _log.debug('Starting sync master %r:%r', self._syncmaster, d)
                 self._h.startsession(d)
                 self._h.wait()
                 self._h.sync()
@@ -1375,6 +1376,7 @@ class app(object):
                 self._h.wait()
                 ret = True
                 self._resetting = False
+                _log.info('Reset complete, resuming normal operation')
             else:
                 _log.warning('No sync master set, using rough sync')
                 self._h.startsession(self._h.broadcast)
@@ -1517,7 +1519,7 @@ class app(object):
         idx = len(self._pstore)
         passob['index'] = idx
         self._pstore.append(passob)
-        _log.info('Passing %r: %s %s@%s %s', idx, passob['mpid'], passob['refid'], passob['time'], passob['moto'])
+        _log.info('Passing %r: %s %s@%s %s %s', idx, strops.id2chan(passob['mpid']), passob['refid'], passob['time'], passob['moto'], passob['text'])
         self._t.publish_json(obj=passob, topic=self._passingtopic)
 
     def _isolated_match(self, cid, nt, hist):
@@ -1568,18 +1570,18 @@ class app(object):
             tom = tod.agg(60 * int(round(float(t.as_seconds(2)) / 60.0)))
             self._drifts[chan] = tom - t
             if abs(self._drifts[chan]) > _LOGDRIFT:
-                _log.info('Drift: %r@%s', chan, self._drifts[chan].rawtime(3))
+                _log.info('Offset: %s@%s > %s', chan, self._drifts[chan].rawtime(3), _LOGDRIFT)
             # trigger top-of-minute tasks
             if chan == self._tomsrc:
                 self._emit_env()
                 self._reqstatus()
         elif t.refid == self._cf['moto']:
-            _log.debug('Moto: %r@%s', chan, t.rawtime(2))
+            _log.debug('Moto: %s@%s', chan, t.rawtime(2))
             self._motos[chan] = t
         elif t.refid == self._cf['gate']:
             if chan == self._gatesrc:
                 self._cleanqueues()
-                _log.debug('Gate trigger: %r@%s', chan, t.rawtime(2))
+                _log.debug('Gate trigger: %s@%s', chan, t.rawtime(2))
                 self._gate = t - _GATEDELAY
                 po = {
                     'index': None,
@@ -1602,7 +1604,7 @@ class app(object):
                 }
                 self._passing(po)
             else:
-                _log.warning('Spurious gate trigger: %r@%s', chan,
+                _log.warning('Spurious gate trigger: %s@%s', chan,
                              t.rawtime(2))
 
     def _prepareq(self, refid):
@@ -1680,6 +1682,7 @@ class app(object):
             _log.debug('Ignored invalid command')
 
     def run(self):
+        _log.info('Starting')
         self._loadconfig()
 
         # start threads
@@ -1714,7 +1717,7 @@ class app(object):
 def main():
     # attach a console log handler to the root logger
     ch = logging.StreamHandler()
-    ch.setLevel(metarace.LOGLEVEL)
+    ch.setLevel(_LOGLEVEL)
     fh = logging.Formatter(metarace.LOGFORMAT)
     ch.setFormatter(fh)
     logging.getLogger().addHandler(ch)
