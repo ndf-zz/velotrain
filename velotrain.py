@@ -317,7 +317,7 @@ class prounit(object):
                                     chan=cstr,
                                     refid=rstr,
                                     source=self.name)
-                        self.__hub.passing(self.ip, t)
+                        self.__hub.passing(t)
                         if ack:
                             self.__hub.ackpass(self.ip)
                         self.__cksumerr = 0
@@ -344,7 +344,7 @@ class prounit(object):
                                 chan='STS',
                                 refid=rstr,
                                 source=self.name)
-                    self.__hub.statusack(self.ip, t)
+                    self.__hub.statusack(t)
                     ret = True
                 else:
                     _hlog.info('%r invalid status: %r', self.ip, msg)
@@ -396,7 +396,6 @@ class prohub(threading.Thread):
         self.__tc = 0
         self.__cb = self.__defcb
         self.__statuscb = self.__defscb
-        self.__cbdata = None
 
     def add(self, ip, name):
         """Queue an add unit command."""
@@ -479,17 +478,17 @@ class prohub(threading.Thread):
         _hlog.debug('SEND %r: %r', dst, msg)
         return self.port.sendto(msg, (dst, self.portno))
 
-    def passing(self, ip, p):
+    def passing(self, p):
         """Queue a passing record."""
-        self.cqueue.put_nowait(('PASSING', ip, p))
+        self.cqueue.put_nowait(('PASSING', p))
 
     def pingall(self):
         """Broadcast a status request."""
         self.cqueue.put_nowait(('ALLSTAT', None, None))
 
-    def statusack(self, ip, p):
+    def statusack(self, p):
         """Queue a status record."""
-        self.cqueue.put_nowait(('STATUSACK', ip, p))
+        self.cqueue.put_nowait(('STATUSACK', p))
 
     def ackpass(self, ip):
         """Acknowledge a passing to the nominated unit."""
@@ -518,7 +517,7 @@ class prohub(threading.Thread):
         """Queue config get command."""
         self.cqueue.put_nowait(('WRITE', QUECMD, ip))
 
-    def setcb(self, cbfunc=None, statusfunc=None, data=None):
+    def setcb(self, cbfunc=None, statusfunc=None):
         """Set the callback function for passing messages."""
         if cbfunc is not None:
             self.__cb = cbfunc
@@ -528,15 +527,14 @@ class prohub(threading.Thread):
             self.__statuscb = statusfunc
         else:
             self.__statuscb = self.__defscb
-        self.__cbdata = data
 
-    def __defcb(self, ip, t, data=None):
+    def __defcb(self, t):
         """Default passing callback."""
-        _hlog.debug('Passing: %r: %r', ip, t)
+        _hlog.debug('Passing: %r', t)
 
-    def __defscb(self, ip, m, data=None):
+    def __defscb(self, m):
         """Default status callback."""
-        _hlog.debug('Status: %r: %r', ip, m)
+        _hlog.debug('Status: %r', m)
 
     def __configset(self, ip, req):
         """Request update of the keys in req on unit."""
@@ -579,11 +577,11 @@ class prohub(threading.Thread):
                 if len(m) == 3:
                     self.__write(m[1], m[2])
             elif m[0] == 'PASSING':
-                if len(m) == 3:
-                    self.__cb(m[1], m[2], self.__cbdata)
+                if len(m) == 2:
+                    self.__cb(m[1])
             elif m[0] == 'STATUSACK':
-                if len(m) == 3:
-                    self.__statuscb(m[1], m[2], self.__cbdata)
+                if len(m) == 2:
+                    self.__statuscb(m[1])
             elif m[0] == 'SYNC':
                 # broadcast or direct a rough sync command
                 dst = self.broadcast
@@ -620,10 +618,10 @@ class prohub(threading.Thread):
                     self.__read()  # block until timeout
                 except socket.timeout:
                     self.__tc += 1
-                    if self.__tc > 115:
+                    if self.__tc > 100:
                         # send a flush/timeout passing
                         self.__tc = 0
-                        self.passing(None, tod.now())
+                        self.passing(tod.now(source=None))
                 while True:  # until command queue empty exception
                     m = self.cqueue.get_nowait()
                     self.cqueue.task_done()
@@ -772,13 +770,13 @@ class app(object):
         """Handle a command callback from telegraph"""
         self._cbq.put(('COMMAND', topic, message))
 
-    def _hpcb(self, src, t, data=None):
+    def _hpcb(self, t):
         """Handle a passing event callback from timer hub"""
-        self._cbq.put(('RAWPASS', src, t))
+        self._cbq.put(('RAWPASS', t))
 
-    def _hscb(self, src, m, data=None):
+    def _hscb(self, m):
         """Handle a status event callback from timer hub"""
-        self._cbq.put(('STATUS', src, m))
+        self._cbq.put(('STATUS', m))
 
     def _env(self):
         """Return an environment tuple (t, h, p) if available, or None."""
@@ -855,6 +853,7 @@ class app(object):
             self._t.subscribe(bt + '/marker')
             self._t.subscribe(bt + '/request')
             self._t.subscribe(bt + '/reset')
+            self._t.subscribe(bt + '/timer')
             self._acktopic = bt + '/ack'
             self._statustopic = bt + '/status'
             self._passingtopic = bt + '/passing'
@@ -1080,7 +1079,7 @@ class app(object):
         _log.info(' '.join(slog))
         self._t.publish_json(obj=st, topic=self._statustopic, retain=True)
 
-    def _rawstatus(self, src, msg):
+    def _rawstatus(self, msg):
         """Handle raw status message from hub in main thread."""
         if msg.source in self._mps:
             statv = msg.refid.split(':')
@@ -1092,20 +1091,24 @@ class app(object):
             _log.debug('Status %r from unconfigured mp %r', msg.refid,
                        msg.source)
 
-    def _timeout(self, t):
+    def _timeout(self):
         """Perform cleanup and queue unchoking as required."""
         if not self._resetting:
             self._cleanqueues()
             self._h.pingall()
         return None
 
-    def _rawpassing(self, src, t):
+    def _rawpassing(self, t):
         """Handle a raw passing message from hub in main thread."""
         cid = t.source
-        if src is None:
-            return self._timeout(t)
+        if cid is None:
+            return self._timeout()
         if self._resetting:
-            _log.debug('Ignored %r during reset: %r@%s', src, cid,
+            if cid == self._tomsrc and t.refid == self._cf['trig']:
+                self._resetting = False
+                _log.info('Reset complete, resuming normal operation')
+            else:
+                _log.debug('Ignored passing during reset: %r@%s', cid,
                        t.rawtime(2))
             return None
 
@@ -1114,7 +1117,7 @@ class app(object):
         if cid == self._syncmaster:
             self._offset = nt.timeval - t.timeval
         elif cid not in self._mps:
-            _log.info('Spurious %r passing: %r@%s', src, cid, t.rawtime(2))
+            _log.info('Spurious passing: %r@%s', cid, t.rawtime(2))
             return None
 
         # patch invalid refid
@@ -1142,11 +1145,11 @@ class app(object):
 
         # then process
         if t.refid in (self._cf['gate'], self._cf['trig']):
-            self._systempass(src, t, cid)
+            self._systempass(t, cid)
         else:
             # moto is also reported as a rider for reference
             if t.refid == self._cf[u'moto']:
-                self._systempass(src, t, cid)
+                self._systempass(t, cid)
             ps = self._prepareq(t.refid)
             ps['q'].insert(pri=t, sec=None, bib=cid)
             self._process_pq(t.refid, ps)
@@ -1375,8 +1378,6 @@ class app(object):
                 self._h.configset(d, {"Sync Pulse": True, "Active Loop": True})
                 self._h.wait()
                 ret = True
-                self._resetting = False
-                _log.info('Reset complete, resuming normal operation')
             else:
                 _log.warning('No sync master set, using rough sync')
                 self._h.startsession(self._h.broadcast)
@@ -1385,7 +1386,6 @@ class app(object):
                 self._h.sync()
                 self._h.wait()
                 ret = False
-                self._resetting = False
         except Exception as e:
             _log.error('%s in Reset: %s', e.__class__.__name__, e)
         finally:
@@ -1563,7 +1563,7 @@ class app(object):
         }
         self._passing(po)
 
-    def _systempass(self, src, t, chan):
+    def _systempass(self, t, chan):
         """Process a system passing message."""
         if t.refid == self._cf['trig']:
             # store, check and log channel drift
@@ -1573,8 +1573,10 @@ class app(object):
                 _log.info('Offset: %s@%s > %s', chan, self._drifts[chan].rawtime(3), _LOGDRIFT)
             # trigger top-of-minute tasks
             if chan == self._tomsrc:
-                self._emit_env()
+                # dump any stale passings before emitting status
+                self._timeout()
                 self._reqstatus()
+                self._emit_env()
         elif t.refid == self._cf['moto']:
             _log.debug('Moto: %s@%s', chan, t.rawtime(2))
             self._motos[chan] = t
@@ -1656,6 +1658,22 @@ class app(object):
             _log.warning('%s reading request: %s', e.__class__.__name__, e)
         self._replay(serial, filter)
 
+    def _foreigntimer(self, msg):
+        """Read in a telegraphed timer message."""
+        # 'INDEX;SOURCE;CHANNEL;REFID;TIMEOFDAY'
+        t = None
+        tv = msg.split(u';')
+        if len(tv) == 5:
+            t = tod.mktod(tv[4])
+        if t is not None:
+            t.index = tv[0]
+            t.source = tv[1]
+            t.chan = tv[2]
+            t.refid = tv[3]
+            self._rawpassing(t)
+        else:
+            _log.warning('Ignored invalid foreign timer: %r', msg)
+
     def _command(self, topic, msg):
         """Process a command from telegraph."""
         _log.debug('Command %r', topic)
@@ -1678,6 +1696,8 @@ class app(object):
                 self._resethub()
             else:
                 _log.warning('Invalid reset authorisation key')
+        elif req == 'timer':
+            self._foreigntimer(msg)
         else:
             _log.debug('Ignored invalid command')
 
@@ -1697,9 +1717,9 @@ class app(object):
                 m = self._cbq.get()
                 self._cbq.task_done()
                 if m[0] == 'RAWPASS':
-                    self._rawpassing(m[1], m[2])
+                    self._rawpassing(m[1])
                 elif m[0] == 'STATUS':
-                    self._rawstatus(m[1], m[2])
+                    self._rawstatus(m[1])
                 elif m[0] == 'COMMAND':
                     self._command(m[1], m[2])
                 else:
