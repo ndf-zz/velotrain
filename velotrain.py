@@ -1147,9 +1147,10 @@ class app(object):
         if t.refid in (self._cf['gate'], self._cf['trig']):
             self._systempass(t, cid)
         else:
-            # moto is also reported as a rider for reference
+            # process moto as system pass then overwrite refid
             if t.refid == self._cf[u'moto']:
                 self._systempass(t, cid)
+                t.refid = 'moto'
             ps = self._prepareq(t.refid)
             ps['q'].insert(pri=t, sec=None, bib=cid)
             self._process_pq(t.refid, ps)
