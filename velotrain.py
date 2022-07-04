@@ -18,7 +18,7 @@ from metarace import jsonconfig
 from metarace.telegraph import telegraph
 from libscrc import mcrf4xx
 
-_LOGLEVEL = logging.INFO
+_LOGLEVEL = logging.DEBUG
 _log = logging.getLogger('velotrain')
 _log.setLevel(_LOGLEVEL)
 _hlog = logging.getLogger('velotrain.hub')
@@ -30,14 +30,16 @@ _CONFIGFILE = 'velotrain.json'
 _PASSLEVEL = 30
 # expiry threshold for decoder level status
 _STATTHRESH = tod.tod('173')
-# threshold for moto assist
-_MOTOPROX = tod.tod('0.5')
+# threshold for moto proximity report
+_MOTOPROX = 1.0
 # start logging decoder unit drift above this many seconds
 _LOGDRIFT = 0.10
 # automatically isolate new passings ISOTHRESH newer than last processed pass
-_ISOTHRESH = tod.tod('40.0')
-# choke queue for no longer than ISOMAXAGE
-_ISOMAXAGE = tod.tod('8.0')
+_ISOTHRESH = tod.tod('30.0')
+# suppress gates older than maxelap
+_MAXELAP = tod.tod('10:00')
+# choke queue for no longer than ISOMAXAGE ~ 35km/h over 50m
+_ISOMAXAGE = tod.tod('5.0')
 # start gate trigger correction
 _GATEDELAY = tod.tod('0.075')
 # default channel ordering
@@ -832,7 +834,7 @@ class app(object):
         if isinstance(self._cf['sync'], str) and self._cf['sync'] in self._mps:
             self._syncmaster = self._cf['sync']
             _log.info('Enabled %s:%s as sync master', self._syncmaster,
-                       self._mps[self._syncmaster])
+                      self._mps[self._syncmaster])
         else:
             _log.warning('Sync master not configured (%s)', self._cf['sync'])
 
@@ -881,7 +883,7 @@ class app(object):
         """Initialise the sector map data structures."""
         _log.debug('Initialising track for mps: %r', self._mps)
         for d in self._mps:
-            self._dstat[d] = (None, None)
+            self._dstat[d] = None
             self._drifts[d] = tod.agg(0)
             self._motos[d] = None
         self._gate = None
@@ -1044,7 +1046,7 @@ class app(object):
         else:
             _log.debug('Gate split mp %r not configured', startmp)
         _log.info('Configured %s splits: %r', len(self._secmap),
-                   ', '.join(sorted(self._secmap)))
+                  ', '.join(sorted(self._secmap)))
 
     def _reqstatus(self):
         """Publish a status message."""
@@ -1061,21 +1063,24 @@ class app(object):
             'gate': gtime,
             'units': [],
         }
-        slog = ['Status Count:{} Offset:{}'.format(len(self._pstore), str(self._offset)) ]
+        slog = [
+            'Status Count:{} Offset:{}'.format(len(self._pstore),
+                                               str(self._offset))
+        ]
         for d in self._mps:
             mpid = strops.chan2id(d)
             cname = self._mpnames[d]
-         
+
             dv = None
             if d in self._drifts:
                 dv = self._drifts[d].rawtime(3)
             st['units'].append({
                 'mpid': mpid,
                 'name': cname,
-                'noise': self._dstat[d][0],
+                'noise': self._dstat[d],
                 'offset': dv,
             })
-            slog.append('{}:{}'.format(d,self._dstat[d][0]))
+            slog.append('{}:{}'.format(d, self._dstat[d]))
         _log.info(' '.join(slog))
         self._t.publish_json(obj=st, topic=self._statustopic, retain=True)
 
@@ -1086,7 +1091,8 @@ class app(object):
             if len(statv) > 0:
                 _log.debug('Mp %r: noise=%r@%s', msg.source, statv[0],
                            msg.rawtime(0))
-                self._dstat[msg.source] = (statv[0], msg)
+                nv = strops.confopt_posint(statv[0], None)
+                self._dstat[msg.source] = nv
         else:
             _log.debug('Status %r from unconfigured mp %r', msg.refid,
                        msg.source)
@@ -1109,7 +1115,7 @@ class app(object):
                 _log.info('Reset complete, resuming normal operation')
             else:
                 _log.debug('Ignored passing during reset: %r@%s', cid,
-                       t.rawtime(2))
+                           t.rawtime(2))
             return None
 
         # store offset on sync master and discard unconfigured mp
@@ -1153,6 +1159,7 @@ class app(object):
                 t.refid = 'moto'
             ps = self._prepareq(t.refid)
             ps['q'].insert(pri=t, sec=None, bib=cid)
+            # todo: check if moto is expected before processing
             self._process_pq(t.refid, ps)
         return None
 
@@ -1412,12 +1419,18 @@ class app(object):
                 # check for start gate and moto proximity
                 elap = None
                 if self._gate is not None and self._gate < j:
-                    elap = str((j - self._gate).as_seconds(2))
-                moto = 'norm'
+                    et = j - self._gate
+                    if et < _MAXELAP:
+                        elap = et.rawtime(2)
+                moto = None
                 if cid in self._motos and self._motos[cid] is not None:
                     mt = self._motos[cid]
-                    if mt <= j and (j - mt) < _MOTOPROX:
-                        moto = 'moto'
+                    dt = tod.agg(j) - mt
+                    _log.debug('Moto comp: j=%s, mt=%s, dt=%s/%s',
+                               j.rawtime(4), mt.rawtime(4), dt.rawtime(4),
+                               dt.__class__.__name__)
+                    if dt > -0.1 and dt < _MOTOPROX:
+                        moto = dt.rawtime(2)
                 po = {
                     'index': None,
                     'date': time.strftime('%F'),
@@ -1467,12 +1480,18 @@ class app(object):
                     # check for start gate and moto proximity
                     elap = None
                     if self._gate is not None and self._gate < j:
-                        elap = str((j - self._gate).as_seconds(2))
-                    moto = 'norm'
+                        et = j - self._gate
+                        if et < _MAXELAP:
+                            elap = et.rawtime(2)
+                    moto = None
                     if cid in self._motos and self._motos[cid] is not None:
                         mt = self._motos[cid]
-                        if mt <= j and (j - mt) < _MOTOPROX:
-                            moto = 'moto'
+                        dt = tod.agg(j) - mt
+                        _log.debug('Moto comp: j=%s, mt=%s, dt=%s/%s',
+                                   j.rawtime(4), mt.rawtime(4), dt.rawtime(4),
+                                   dt.__class__.__name__)
+                        if dt > -0.1 and dt < _MOTOPROX:
+                            moto = dt.rawtime(2)
                     po = {
                         'index': None,
                         'date': time.strftime('%F'),
@@ -1520,7 +1539,9 @@ class app(object):
         idx = len(self._pstore)
         passob['index'] = idx
         self._pstore.append(passob)
-        _log.info('Passing %r: %s %s@%s %s %s', idx, strops.id2chan(passob['mpid']), passob['refid'], passob['time'], passob['moto'], passob['text'])
+        _log.info('Passing %r: %s %s@%s %s %s', idx,
+                  strops.id2chan(passob['mpid']), passob['refid'],
+                  passob['time'], passob['moto'], passob['text'])
         self._t.publish_json(obj=passob, topic=self._passingtopic)
 
     def _isolated_match(self, cid, nt, hist):
@@ -1544,7 +1565,9 @@ class app(object):
         nt = tod.now()
         elap = None
         if self._gate is not None and self._gate < nt:
-            elap = str((nt - self._gate).as_seconds(2))
+            et = nt - self._gate
+            if et < _MAXELAP:
+                elap = et.rawtime(2)
         po = {
             'index': None,
             'date': time.strftime('%F'),
@@ -1552,7 +1575,7 @@ class app(object):
             'mpid': 0,
             'refid': 'marker',
             'env': self._env(),
-            'moto': 'norm',
+            'moto': None,
             'elap': elap,
             'lap': None,
             'half': None,
@@ -1571,7 +1594,8 @@ class app(object):
             tom = tod.agg(60 * int(round(float(t.as_seconds(2)) / 60.0)))
             self._drifts[chan] = tom - t
             if abs(self._drifts[chan]) > _LOGDRIFT:
-                _log.info('Offset: %s@%s > %s', chan, self._drifts[chan].rawtime(3), _LOGDRIFT)
+                _log.info('Offset: %s@%s > %s', chan,
+                          self._drifts[chan].rawtime(3), _LOGDRIFT)
             # trigger top-of-minute tasks
             if chan == self._tomsrc:
                 # dump any stale passings before emitting status
@@ -1580,7 +1604,7 @@ class app(object):
                 self._emit_env()
         elif t.refid == self._cf['moto']:
             _log.debug('Moto: %s@%s', chan, t.rawtime(2))
-            self._motos[chan] = t
+            self._motos[chan] = t.truncate(3)
         elif t.refid == self._cf['gate']:
             if chan == self._gatesrc:
                 self._cleanqueues()
@@ -1595,7 +1619,7 @@ class app(object):
                     'mpid': 0,
                     'refid': 'gate',
                     'env': self._env(),
-                    'moto': 'norm',
+                    'moto': None,
                     'elap': '0.00',
                     'lap': None,
                     'half': None,
