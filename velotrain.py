@@ -1416,12 +1416,16 @@ class app(object):
                 # fetch sector data
                 sm = self._secmap[cid]
 
-                # check for start gate and moto proximity
+                # check for start gate
                 elap = None
                 if self._gate is not None and self._gate < j:
                     et = j - self._gate
                     if et < _MAXELAP:
                         elap = et.rawtime(2)
+                # fall back run start for elap
+                if elap is None and p['rs'] is not None:
+                    elap = (j - p['rs']).rawtime(2)
+                # check moto proximity
                 moto = None
                 if cid in self._motos and self._motos[cid] is not None:
                     mt = self._motos[cid]
@@ -1477,6 +1481,9 @@ class app(object):
                     # fetch sector data
                     sm = self._secmap[cid]
 
+                    # reset runstart
+                    p['rs'] = None
+
                     # check for start gate and moto proximity
                     elap = None
                     if self._gate is not None and self._gate < j:
@@ -1524,6 +1531,7 @@ class app(object):
                     # save to history - this is now a processed passing
                     p['lt'] = j
                     p['lc'] = cid
+                    p['rs'] = j
                     p[cid] = j
                     # don't unchoke yet - there may be multiple stale passes
                     # issue to all clients and continue
@@ -1638,7 +1646,7 @@ class app(object):
         """Return a passing queue for refid, initialised if required."""
         if refid not in self._passq:
             nq = {}
-            mps = ['lt', 'lc', 'choke']
+            mps = ['lt', 'lc', 'choke', 'rs']
             mps.extend(self._mps)
             for d in mps:
                 nq[d] = None
