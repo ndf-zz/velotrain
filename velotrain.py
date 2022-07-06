@@ -49,7 +49,7 @@ _DEFLAPLEN = 250.0
 # default operational configuration
 _CONFIG = {
     'gate': '100001',  # refid of start gate transponder
-    'moto': '100002',  # refid of motorbike transponder
+    'moto': ['100002'],  # list of motorbike transponders
     'trig': '255',  # refid of sync trigger messages
     'passlevel': _PASSLEVEL,  # default read level in decoders
     'uaddr': '',  # UDP host ip (listen) address
@@ -1154,7 +1154,7 @@ class app(object):
             self._systempass(t, cid)
         else:
             # process moto as system pass then overwrite refid
-            if t.refid == self._cf[u'moto']:
+            if t.refid in self._cf[u'moto']:
                 self._systempass(t, cid)
                 t.refid = 'moto'
             ps = self._prepareq(t.refid)
@@ -1610,7 +1610,7 @@ class app(object):
                 self._timeout()
                 self._reqstatus()
                 self._emit_env()
-        elif t.refid == self._cf['moto']:
+        elif t.refid in self._cf['moto']:
             _log.debug('Moto: %s@%s', chan, t.rawtime(2))
             self._motos[chan] = t.truncate(3)
         elif t.refid == self._cf['gate']:
