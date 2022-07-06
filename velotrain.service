@@ -2,6 +2,7 @@
 Description=Velodrome Transponder Training
 Wants=time-sync.target
 After=time-sync.target
+After=network.target
 
 [Service]
 Type=simple
