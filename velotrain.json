@@ -1,20 +1,16 @@
 {
  "velotrain": {
   "authkey": "resetpassword",
-  "basetopic": "velotrain",
-  "bcast": "127.1.1.255",
-  "dhi": [
-   "127.0.0.1",
-   1946
-  ],
   "gate": "100001",
   "gatesrc": "C2",
   "laplen": 250.0,
-  "maxgate": 22.5,
   "maxspeed": 95.0,
-  "mingate": 9.0,
-  "minspeed": 30.0,
-  "moto": ["100002","xter", "jop"],
+  "minspeed": 38.0,
+  "moto": [
+   "100002",
+   "100003",
+   "100004"
+  ],
   "mps": {
    "C1": {
     "100": "C5",
@@ -89,10 +85,6 @@
    "C7",
    "C8",
    "C2"
-  ],
-  "passlevel": 30,
-  "sync": null,
-  "uaddr": "127.1.1.128",
-  "uport": 2008
+  ]
  }
 }

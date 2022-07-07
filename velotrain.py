@@ -48,8 +48,8 @@ _DEFSEQ = ['C1', 'C9', 'C4', 'C6', 'C3', 'C5', 'C7', 'C8', 'C2']
 _DEFLAPLEN = 250.0
 # default operational configuration
 _CONFIG = {
-    'gate': '100001',  # refid of start gate transponder
-    'moto': ['100002'],  # list of motorbike transponders
+    'gate': None,  # refid of start gate transponder
+    'moto': [],  # list of motorbike transponders
     'trig': '255',  # refid of sync trigger messages
     'passlevel': _PASSLEVEL,  # default read level in decoders
     'uaddr': '',  # UDP host ip (listen) address

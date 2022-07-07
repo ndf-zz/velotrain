@@ -1,8 +1,7 @@
 [Unit]
 Description=Velodrome Transponder Training
 Wants=time-sync.target
-After=time-sync.target
-After=network.target
+After=time-sync.target network.target
 
 [Service]
 Type=simple
