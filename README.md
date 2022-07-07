@@ -9,7 +9,7 @@ measurements as JSON-encoded objects to MQTT.
 ## Telegraph (MQTT) Interface
 
 The topics below are relative to the configured basetopic (default:
-'velotrain'), from the persepective of the velotrain process. For
+'velotrain'), from the perspective of the velotrain process. For
 all JSON encoded objects, invalid or unavailable properties will be
 reported as null. Examples use the default basetopic.
 
@@ -83,15 +83,23 @@ minute. Status records are JSON encoded objects with the following properties:
    - offset: (string) Rough offset of system clock to UTC
    - count: (integer) Count of passing records
    - env: (list) [tmperature, humidity, pressure] where each value is a float value in units degrees Celsius, %rh, and hPa respectively
-   - time: (string) Time of day of last gate trigger HH:MM:SS.dc
-   - name: (string) Name of measurement point
+   - gate: (string) Time of day of last gate trigger HH:MM:SS.dc
+   - units: (list) List of JSON encoded objects, each containing a measurement
+     point status:
+       - mpid: (integer) Measurement point ID
+       - name: (string) Measurement point name
+       - noise: (integer) Interference noise value 0 - 100. Values under
+         40 indicate normal operation. Larger values indicate interference.
+       - offset: (string) Unit clock offset from system time in seconds
+         formatted as [-]s.dcm
 
 Example: Status update
 
 	Topic:		velotrain/status
 	Payload:	{"date": "2022-07-07", "time": "23:04:00.15",
 			 "offset": "0.211", "env": [13.1, 62.0, 1013.0],
-			 "count": 1, "gate": null, "units": [
+			 "count": 123, "gate": null,
+                         "units": [
 			  {"mpid": 1, "name": "Finish",
                            "noise": 20, "offset": "0.000"},
 			  {"mpid": 2, "name": "Pursuit A",
