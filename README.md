@@ -1,9 +1,107 @@
 # velotrain
 
 velotrain reads raw transponder passing information from a set
-of up to 9 Chronelec Protime decoders, filters the messages according
+of up to 9 measurement points, filters the messages according
 to track configuration parameters and then emits valid timing
 measurements as JSON-encoded objects to MQTT.
+
+
+## Operation
+
+The velodrome is divided into a closed loop of timing sectors
+by measurement points at each of the interesting offsets, for example:
+
+   - Finish line
+   - 200m Start
+   - Pursuit B
+   - Pursuit A
+
+A rider is considered to be in a 'run' if their speed over any
+configured sector (eg Finish line to 200m start) is between
+configured values (default: 38 km/h to 90 km/h).
+Passings emitted for a rider in a run will include any available
+lap, half-lap, quarter-lap, 100 m, and 50 m splits.
+Rider passings slower or faster than the configured limits are
+considered isolated, and will be reported without splits.
+
+Where possible, valid raw passings received out of order will be
+corrected and re-ordered before being emitted. In the case that
+an isolated raw passing violates the configured track ordering and 
+speed limits, it may be reported out of order.
+
+For a Protime active/passive dual loop configuration, riders
+will not be registered at all until they are moving faster than
+about 30 km/h, no matter what software limits have been configured.
+
+
+## Configuration
+
+Track layout, system transponder ids and speed limits are configured
+using a metarace jsonconfig entry with the section 'velotrain' and the
+following keys:
+
+   - authkey: (string) reset authorisation string, default: null
+   - gate: (string) transponder ID for start gate, default: null
+   - gatedelay: (string) trigger delay for start gate, default: '0.075' _[1]_
+   - gatesrc: (string) channel start gate reports to eg 'C2', default: null
+   - laplen: (float) lap length in metres, default: 250.0
+   - maxspeed: (float) maximum sector speed in km/d, default: 90.0
+   - minspeed: (float) minimum sector speed in km/h, default: 38.0
+   - moto: (list) list of transponder IDs attached to motos, default: []
+   - trig: (string) transponder ID of sync trigger messages, default: '255'
+   - passlevel: (integer) minimum accepted passing level, default 40 _[2]_
+   - uaddr: (string) UDP host listen address, default ''
+   - uport: (integer) UDP host port, default: 2008
+   - bcast: (string) broadcast address for timing LAN,
+     default: '255.255.255.255'
+   - basetopic: (string) base topic for telegraph interface,
+     default: 'velotrain'
+   - sync: (string) channel of synchronisation master unit, default: null
+   - mingate: (float) minimum accepted speed in km/h over the
+     start gate sector, default: 9.0
+   - maxgate: (float) maximum accepted speed in km/h over the
+     start gate sector, default: 22.5
+   - dhi: (list) ['address', port] DHI port for Caprica scoreboard,
+     default: null
+   - dhiencoding: (string) text encoding for DHI messages, default: 'utf-8'
+   - mpseq: (list) ordering of channels on the track,
+     default: ['C1', 'C9', 'C4', 'C6', 'C3', 'C5', 'C7', 'C8', 'C2'] _[3]_
+   - mps: (dict) mapping of channel IDs to measurement point configs,
+     default: {} _[4]_
+
+Configured measurement points divide the track into a closed loop of
+timing sectors, with a set of splits at each measurement point.
+Measurement point config entries have the following options, omitted keys
+receive a default value:
+
+   - name: (string) visible name of the measurement point,
+     default: channel ID
+   - ip: (string) IP address of connected Protime decoder,
+     default: null _[4]_
+   - offset: (float) distance in metres from finish line to measurement 
+     point, default: null
+   - half: (string) channel ID corresponding to a half lap before this unit,
+     default: null
+   - qtr: (string) channel ID corresponding to quarter lap before this unit,
+     default: null
+   - 200: (string) channel ID corresponding to 200 m before this unit,
+     default: null
+   - 100: (string) channel ID corresponding to 100 m before this unit,
+     default: null
+   - 50: (string) channel ID corresponding to 50 m before this unit,
+     default: null
+
+Notes:
+
+   1. 0.075 seconds is LS transponder delay when triggered by
+      start gate release
+   2. Sets the 'level' option in all attached Protime decoder units
+   3. Default channel ordering matches trackmeet, all configured units
+      must appear once in this sequence, however the sequence may contain
+      more channels than are configured.
+   4. Measurement points require a non-null IP entry to be configured.
+      For use with foreign timers, set the IP to be an empty string: ''.
+      Refer to the sample velomon.json for an example setting
 
 
 ## Telegraph (MQTT) Interface
@@ -11,7 +109,7 @@ measurements as JSON-encoded objects to MQTT.
 The topics below are relative to the configured basetopic (default:
 'velotrain'), from the perspective of the velotrain process. For
 all JSON encoded objects, invalid or unavailable properties will be
-reported as null. Examples use the default basetopic.
+reported as null.
 
 
 ### passing (publish)
@@ -25,7 +123,7 @@ are JSON encoded objects with the following properties:
    - mpid: (integer) Measurement point ID 0 - 9
    - refid: (string) Transponder ID or system passing ID 'gate', 'moto'
      or 'marker'
-   - env: (list) [tmperature, humidity, pressure] where each value
+   - env: (list) [temperature, humidity, pressure] where each value
      is a float value in units degrees Celsius, %rh, and hPa respectively
    - moto: (string) Proximity to moto in seconds if drafted
    - elap: (string) Elapsed time since last start gate or start of run
@@ -61,7 +159,7 @@ passing records are JSON encoded objects with the following properties:
      formatted HH:MM:SS.dc
    - mpid: (integer) Measurement point ID 0 - 9
    - refid: (string) Raw transponder ID
-   - env: (list) [tmperature, humidity, pressure] where each value
+   - env: (list) [temperature, humidity, pressure] where each value
      is a float value in units degrees Celsius, %rh, and hPa respectively
    - name: (string) Name of measurement point
 
@@ -82,7 +180,7 @@ minute. Status records are JSON encoded objects with the following properties:
    - time: (string) Time of day status was issued formatted HH:MM:SS.dc
    - offset: (string) Rough offset of system clock to UTC
    - count: (integer) Count of passing records
-   - env: (list) [tmperature, humidity, pressure] where each value is a float value in units degrees Celsius, %rh, and hPa respectively
+   - env: (list) [temperature, humidity, pressure] where each value is a float value in units degrees Celsius, %rh, and hPa respectively
    - gate: (string) Time of day of last gate trigger HH:MM:SS.dc
    - units: (list) List of JSON encoded objects, each containing a measurement
      point status:
@@ -99,9 +197,9 @@ Example: Status update
 	Payload:	{"date": "2022-07-07", "time": "23:04:00.15",
 			 "offset": "0.211", "env": [13.1, 62.0, 1013.0],
 			 "count": 123, "gate": null,
-                         "units": [
+			 "units": [
 			  {"mpid": 1, "name": "Finish",
-                           "noise": 20, "offset": "0.000"},
+			   "noise": 20, "offset": "0.000"},
 			  {"mpid": 2, "name": "Pursuit A",
 			   "noise": 32, "offset": "0.025"},
 			  {"mpid": 3, "name": "Pursuit B",
@@ -119,29 +217,36 @@ Example: Status update
 
 ### request (subscribe)
 
-Receive requests for replay of passing records to the nominated serial
-and filtered according to the optional JSON encoded object:
+Receive requests for replay of passing records to the nominated serial,
+filtered according to the JSON encoded request object:
 
    - serial (string) optional request serial, appended to replay topic
-   - index (list) [first, last] limit response to include passings from
-     index first to index last.
-   - time (list) [starttime, endtime] limit response to passingd between
-     starttime and endtime strings formatted HH:MM:SS.dc
-   - mpid (list) [mpid, ...] include only the nominated mpids in response
-   - refid (list) [refid, ...] include only nominated transponder ids
-     in response
-   - marker (list) [marker, ...] include only passings following the
-     nominated marker strings
+   - index (list) optional [first, last] limit response to include
+     passings from index first to index last.
+   - time (list) optional [starttime, endtime] limit response to
+     passings between starttime and endtime strings formatted HH:MM:SS.dc
+   - mpid (list) optional [mpid, ...] include only the nominated
+     mpids in replay
+   - refid (list) optional [refid, ...] include only nominated
+     transponder ids in response
+   - marker (list) optional [marker, ...] include only passings
+     following the nominated marker strings
 
 Example: Request all passings, publish to default topic
 
 	Topic:		velotrain/request
 	Payload:	b''
+	
+	Reply topic:	velotrain/replay
+	Payload:	[{"index":0, ...}, {"index":1, ...}, ...]
 
 Request a replay of passing 254 to 'xxfd'
 
 	Topic:		velotrain/request
 	Payload:	{"serial": "xxfd", "index": 254}
+	
+	Reply topic:	velotrain/replay/xxfd
+	Payload:	[{"index": 254, ... }]
 
 Replay passings from transponder '123456' and start gate after midday
 before index 10000 and that occur following manual markers 'one' and 'two'
@@ -151,6 +256,9 @@ before index 10000 and that occur following manual markers 'one' and 'two'
 			 "time": ["12:00:00", null],
 			 "index": [null, 10000],
 			 "marker": ["one", "two"]}
+	
+	Reply topic:	velotrain/replay
+	Payload:	[{"index":12, "text":"one","mpid":0, ...}, ...]
 
 
 ### replay[/serial] (publish)
@@ -176,7 +284,7 @@ authkey (config option 'authkey'). For a Tag Heuer Protime decoder network,
 this process may take up to three minutes to complete. For systems
 with foreign timers, this request will just clear passing records.
 
-Example: Request reser process using authkey 'qwertyuiop'
+Example: Request reset process using authkey 'qwertyuiop'
 
 	Topic:		velotrain/reset
 	Payload:	b'qwertyuiop'
@@ -202,7 +310,7 @@ Note: velotrain expects each attached decoder to be triggered from a
 reference clock at the top of each minute, and to report a passing with
 refid matching config option 'trig' (default: '255').
 For systems that maintain synchronisation via a
-different mechanism, a fake top of minute tigger can be sent
+different mechanism, a fake top of minute trigger can be sent
 with the channel of the configured sync source (config key 'sync')
 at any time using the trig refid and a TOD of '0'.
 
@@ -233,4 +341,4 @@ To use as a systemd service, edit the provided unit file
 and copy to /etc/systemd/system, then enable with:
 
 	# systemctl enable velotrain
-	# systemctl start
+	# systemctl start velotrain

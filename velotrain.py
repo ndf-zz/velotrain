@@ -27,7 +27,7 @@ _hlog.setLevel(_LOGLEVEL)
 # optional configuration override file
 _CONFIGFILE = 'velotrain.json'
 # default decoder detection level
-_PASSLEVEL = 30
+_PASSLEVEL = 40
 # expiry threshold for decoder level status
 _STATTHRESH = tod.tod('173')
 # threshold for moto proximity report
@@ -41,7 +41,7 @@ _MAXELAP = tod.tod('10:00')
 # choke queue for no longer than ISOMAXAGE ~ 35km/h over 50m
 _ISOMAXAGE = tod.tod('5.0')
 # start gate trigger correction
-_GATEDELAY = tod.tod('0.075')
+_GATEDELAY = '0.075'
 # default channel ordering
 _DEFSEQ = ['C1', 'C9', 'C4', 'C6', 'C3', 'C5', 'C7', 'C8', 'C2']
 # fallback track length
@@ -49,6 +49,8 @@ _DEFLAPLEN = 250.0
 # default operational configuration
 _CONFIG = {
     'gate': None,  # refid of start gate transponder
+    'gatedelay': _GATEDELAY,  # time delay for start gate message
+    'gatesrc': None,  # channel of start gate loop
     'moto': [],  # list of motorbike transponders
     'trig': '255',  # refid of sync trigger messages
     'passlevel': _PASSLEVEL,  # default read level in decoders
@@ -57,9 +59,8 @@ _CONFIG = {
     'bcast': '255.255.255.255',  # broadcast address for timing LAN
     'basetopic': 'velotrain',  # MQTT base topic
     'sync': None,  # channel of synchronisation master unit
-    'gatesrc': None,  # channel of start gate loop
     'authkey': None,  # optional reset auth key
-    'minspeed': 28.0,  # minimum sector speed
+    'minspeed': 38.0,  # minimum sector speed
     'maxspeed': 90.0,  # maximum sector speed
     'mingate': 9.0,  # minimum gate start sector speed
     'maxgate': 22.5,  # maximum gate start sector speed
@@ -754,6 +755,7 @@ class app(object):
         self._drifts = {}  # data store for decoder drift
         self._motos = {}  # store for most recent moto passing
         self._gatesrc = None  # gate triggers accepted from this mp
+        self._gatedelay = None  # delay time for gate trigger
         self._tomsrc = None  # top-of-minute actions are triggered by this mp
         self._gate = None  # last gate trigger
         self._passq = {}  # passing queue buffer
@@ -848,6 +850,13 @@ class app(object):
         if self._tomsrc is None:
             raise RuntimeError(
                 'No top-of-minute trigger configured, system inoperable')
+
+        # Read in gate delay if set
+        self._gatedelay = tod.ZERO
+        gd = tod.mktod(self._cf['gatedelay'])
+        if gd is not None:
+            self._gatedelay = gd
+            _log.debug('Gate delay set to: %s', self._gatedelay.rawtime())
 
         # Subscribe to control topics and set publish endpoints
         bt = strops.confopt_str(self._cf['basetopic'], '')
@@ -1617,7 +1626,7 @@ class app(object):
             if chan == self._gatesrc:
                 self._cleanqueues()
                 _log.debug('Gate trigger: %s@%s', chan, t.rawtime(2))
-                self._gate = t - _GATEDELAY
+                self._gate = t - self._gatedelay
                 po = {
                     'index': None,
                     'date': time.strftime('%F'),

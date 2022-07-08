@@ -1,11 +1,7 @@
 {
  "velotrain": {
-  "authkey": "resetpassword",
   "gate": "100001",
   "gatesrc": "C2",
-  "laplen": 250.0,
-  "maxspeed": 95.0,
-  "minspeed": 38.0,
   "moto": [
    "100002",
    "100003",
@@ -75,16 +71,6 @@
     "name": "150m Split",
     "offset": 200.0
    }
-  },
-  "mpseq": [
-   "C1",
-   "C4",
-   "C6",
-   "C3",
-   "C5",
-   "C7",
-   "C8",
-   "C2"
-  ]
+  }
  }
 }
