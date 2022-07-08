@@ -276,6 +276,14 @@ Example: Insert an emoticon '🤷' (U+1F937) at the current time of day
 
 	Topic:		velotrain/marker
 	Payload:	b'\xf0\x9f\xa4\xb7'
+	
+	Reply topic:	velotrain/passing
+	Payload:	{"index": 143, "date": "2022-07-06",
+			 "time": "12:09:13.33", "mpid": 0,
+			 "refid": "marker", "env": null, "moto": null,
+			 "elap": null, "lap": null, "half": null,
+			 "qtr": null, "200": null, "100": null,
+			 "50": null, "text": "\ud83e\udd37"}
 
 ### reset (subscribe)
 
@@ -316,15 +324,33 @@ at any time using the trig refid and a TOD of '0'.
 
 Example: Insert a passing for transponder '123456' on mpid 3 at the current time
 
-	Payload: b';C3;;123456;now'
+	Topic:		velotrain/timer
+	Payload:	b';C3;;123456;now'
+	
+	Reply topic:	velotrain/rawpass
+	Payload:	{"date": "2022-07-06", "env": null,
+			 "refid": "123456", "mpid": 3, "name": "Pursuit B",
+			 "time": "12:23:35.879", "rcv": "12:23:35.879"}
 
 Fake a top-of-minute message to mpid 1, using the default trig:
 
-	Payload: b';C1;;255;0'
+	Topic:		velotrain/timer
+	Payload:	b';C1;;255;0'
+
+	Reply topic:	velotrain/rawpass
+	Payload:	{"date": "2022-07-06", "env": null,
+			 "refid": "255", "mpid": 1, "name": "Finish",
+			 "time": "00:00:00.000", "rcv": "12:25:06.090"}
 
 Insert a passing for transponder '123456' on mpid 4, 10.2345 seconds after 2 pm:
 
-	Payload: b';C4;;123456;14:00:10.2345'
+	Topic:		velotrain/timer
+	Payload:	b';C4;;123456;14:00:10.2345'
+
+	Reply topic:	velotrain/rawpass
+	Payload:	{"date": "2022-07-06", "env": null,
+			 "refid": "123456", "mpid": 4, "name": "200m Start",
+			 "time": "14:00:10.234", "rcv": "12:27:38.988"}
 
 
 ## Requirements
