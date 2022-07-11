@@ -24,6 +24,8 @@ _log.setLevel(_LOGLEVEL)
 _hlog = logging.getLogger('velotrain.hub')
 _hlog.setLevel(_LOGLEVEL)
 
+# add refid to low battery status after this many warnings
+_LOWBATTWARN = 10
 # optional configuration override file
 _CONFIGFILE = 'velotrain.json'
 # default decoder detection level
@@ -311,10 +313,6 @@ class prounit(object):
                             cstr = 'C2'
                         elif pvec[0] == 'MAN':
                             cstr = 'C0'
-                        if pvec[5] == '3':  # LOW BATTERY ALERT
-                            # TODO: issue battery warning to telegraph
-                            _hlog.warning('%r Low battery on %r', self.ip,
-                                          rstr)
                         t = tod.tod(pvec[2],
                                     index=istr,
                                     chan=cstr,
@@ -324,6 +322,10 @@ class prounit(object):
                         if ack:
                             self.__hub.ackpass(self.ip)
                         self.__cksumerr = 0
+                        if pvec[5] == '3':
+                            _hlog.debug('%r Low battery on %r', self.ip, rstr)
+                            t.chan = 'BATT'
+                            self.__hub.statusack(t)
                         ret = True
                     else:
                         _hlog.warning('%r invalid checksum: %r != %r: %r',
@@ -749,6 +751,7 @@ class app(object):
         self._dhi = None
         self._secmap = {}
         self._pstore = []  # store of passings in this session
+        self._batteries = {}  # count of low battery warnings
         self._rlock = threading.Lock()  # reset lock
         self._resetting = False  # status flag set in reset procedure
         self._dstat = {}  # data store for decoder status c1->(level,tod)
@@ -1070,12 +1073,16 @@ class app(object):
             'env': self._env(),
             'count': len(self._pstore),
             'gate': gtime,
+            'battery': [],
             'units': [],
         }
         slog = [
             'Status Count:{} Offset:{}'.format(len(self._pstore),
                                                str(self._offset))
         ]
+        for r in self._batteries:
+            if self._batteries[r] > _LOWBATTWARN:
+                st['battery'].append(r)
         for d in self._mps:
             mpid = strops.chan2id(d)
             cname = self._mpnames[d]
@@ -1095,16 +1102,25 @@ class app(object):
 
     def _rawstatus(self, msg):
         """Handle raw status message from hub in main thread."""
-        if msg.source in self._mps:
-            statv = msg.refid.split(':')
-            if len(statv) > 0:
-                _log.debug('Mp %r: noise=%r@%s', msg.source, statv[0],
-                           msg.rawtime(0))
-                nv = strops.confopt_posint(statv[0], None)
-                self._dstat[msg.source] = nv
-        else:
-            _log.debug('Status %r from unconfigured mp %r', msg.refid,
-                       msg.source)
+        if msg.chan == 'STS':
+            if msg.source in self._mps:
+                statv = msg.refid.split(':')
+                if len(statv) > 0:
+                    _log.debug('Mp %r: noise=%r@%s', msg.source, statv[0],
+                               msg.rawtime(0))
+                    nv = strops.confopt_posint(statv[0], None)
+                    self._dstat[msg.source] = nv
+            else:
+                _log.debug('Status %r from unconfigured mp %r', msg.refid,
+                           msg.source)
+        elif msg.chan == 'BATT':
+            refid = msg.refid
+            if refid not in (self._cf['gate'], self._cf['trig']):
+                if refid not in self._batteries:
+                    self._batteries[refid] = 0
+                self._batteries[refid] += 1
+                _log.debug('Low battery warning on %s, count=%r', refid,
+                           self._batteries[refid])
 
     def _timeout(self):
         """Perform cleanup and queue unchoking as required."""
@@ -1325,6 +1341,7 @@ class app(object):
             self._resetting = True
             # clear passing index & reset data structures
             self._pstore = []
+            self._batteries = {}
             self._initsectors()
             self._resetting = False
             ret = True
@@ -1358,6 +1375,7 @@ class app(object):
                 time.sleep(0.1)
             # clear passing index & reset data structures
             self._pstore = []
+            self._batteries = {}
             self._initsectors()
 
             # blocking wait for a clear block to top of minute
