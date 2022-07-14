@@ -182,6 +182,8 @@ minute. Status records are JSON encoded objects with the following properties:
    - count: (integer) Count of passing records
    - env: (list) [temperature, humidity, pressure] where each value is a float value in units degrees Celsius, %rh, and hPa respectively
    - gate: (string) Time of day of last gate trigger HH:MM:SS.dc
+   - battery: (list) List of transponder refids that have reported a low
+     battery warning since the last system reset
    - units: (list) List of JSON encoded objects, each containing a measurement
      point status:
        - mpid: (integer) Measurement point ID
@@ -196,7 +198,7 @@ Example: Status update
 	Topic:		velotrain/status
 	Payload:	{"date": "2022-07-07", "time": "23:04:00.15",
 			 "offset": "0.211", "env": [13.1, 62.0, 1013.0],
-			 "count": 123, "gate": null,
+			 "count": 123, "gate": null, "battery": ["123876"],
 			 "units": [
 			  {"mpid": 1, "name": "Finish",
 			   "noise": 20, "offset": "0.000"},
