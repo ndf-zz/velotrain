@@ -8,6 +8,7 @@ import threading
 import queue
 import socket
 import json
+import signal
 
 import metarace
 from ypmeteo import ypmeteo
@@ -1839,6 +1840,9 @@ class app(object):
         else:
             _log.debug('Ignored invalid command')
 
+    def _sigterm(self, signum, frame):
+        self._cbq.put(('SHUTDOWN', signum, None))
+
     def run(self):
         _log.info('Starting')
         self._loadconfig()
@@ -1848,9 +1852,13 @@ class app(object):
         self._t.start()
         self._h.start()
 
+        # catch TERM signal
+        signal.signal(signal.SIGTERM, self._sigterm)
+
         # loop on the cbq
+        self._running = True
         try:
-            while True:
+            while self._running:
                 m = self._cbq.get()
                 self._cbq.task_done()
                 if m[0] == 'RAWPASS':
@@ -1859,6 +1867,8 @@ class app(object):
                     self._rawstatus(m[1])
                 elif m[0] == 'COMMAND':
                     self._command(m[1], m[2])
+                elif m[0] == 'SHUTDOWN':
+                    self._running = False
                 else:
                     pass
         finally:
@@ -1869,6 +1879,7 @@ class app(object):
                                  retain=True)
             self._y.exit()
             self._h.exit()
+            self._t.wait()
             self._t.exit()
             self._t.join()
         self._y.join()
