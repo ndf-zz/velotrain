@@ -180,10 +180,13 @@ minute. Status records are JSON encoded objects with the following properties:
    - time: (string) Time of day status was issued formatted HH:MM:SS.dc
    - offset: (string) Rough offset of system clock to UTC
    - count: (integer) Count of passing records
-   - env: (list) [temperature, humidity, pressure] where each value is a float value in units degrees Celsius, %rh, and hPa respectively
+   - env: (list) [temperature, humidity, pressure] where each value
+     is a float value in units degrees Celsius, %rh, and hPa respectively
    - gate: (string) Time of day of last gate trigger HH:MM:SS.dc
    - battery: (list) List of transponder refids that have reported a low
      battery warning since the last system reset
+   - info: (string) Status info, one of: 'running', 'resetting',
+     'error', 'offline' _[1]_
    - units: (list) List of JSON encoded objects, each containing a measurement
      point status:
        - mpid: (integer) Measurement point ID
@@ -193,12 +196,23 @@ minute. Status records are JSON encoded objects with the following properties:
        - offset: (string) Unit clock offset from system time in seconds
          formatted as [-]s.dcm
 
+Notes:
+
+   1. Status info strings:
+       - running: Normal operation
+       - resetting: System reset in progress
+       - offline: velotrain was shutdown (date and time fields
+         indicate when shutdown ocurred)
+       - error: Network connection lost, server status temporarily
+         unavailable
+
 Example: Status update
 
 	Topic:		velotrain/status
 	Payload:	{"date": "2022-07-07", "time": "23:04:00.15",
 			 "offset": "0.211", "env": [13.1, 62.0, 1013.0],
 			 "count": 123, "gate": null, "battery": ["123876"],
+			 "info": "running",
 			 "units": [
 			  {"mpid": 1, "name": "Finish",
 			   "noise": 20, "offset": "0.000"},
@@ -353,6 +367,18 @@ Insert a passing for transponder '123456' on mpid 4, 10.2345 seconds after 2 pm:
 	Payload:	{"date": "2022-07-06", "env": null,
 			 "refid": "123456", "mpid": 4, "name": "200m Start",
 			 "time": "14:00:10.234", "rcv": "12:27:38.988"}
+
+
+### resetunit (subscribe)
+
+Attempt to stop, start and re-synchronise the single measurement
+point unit specified in the message body. Note that the synchronisation
+master may not be re-started this way.
+
+Example: Reset unit "C4"
+
+	Topic:		velotrain/resetunit
+	Payload:	b'C4'
 
 
 ## Requirements

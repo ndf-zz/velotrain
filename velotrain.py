@@ -888,6 +888,7 @@ class app(object):
             self._t.subscribe(bt + '/marker')
             self._t.subscribe(bt + '/request')
             self._t.subscribe(bt + '/reset')
+            self._t.subscribe(bt + '/resetunit')
             self._t.subscribe(bt + '/timer')
             self._acktopic = bt + '/ack'
             self._statustopic = bt + '/status'
@@ -1109,7 +1110,7 @@ class app(object):
             'Status Count:{} Offset:{}'.format(len(self._pstore),
                                                str(self._offset))
         ]
-        for r in self._batteries:
+        for r in sorted(self._batteries):
             if self._batteries[r] > _LOWBATTWARN:
                 st['battery'].append(r)
         for d in self._mps:
@@ -1379,6 +1380,23 @@ class app(object):
         finally:
             self._rlock.release()
         return ret
+
+    def _resetunit(self, unit):
+        """Stop, start and sync a single unit."""
+        if unit in self._mps and unit != self._syncmaster:
+            d = self._mps[unit]
+            _log.debug('Stop and reset %r:%r', unit, d)
+            self._h.configget(d)
+            self._h.wait()
+            self._h.configset(d, _DECODERSANE)
+            self._h.stopsession(d)
+            self._h.startsession(d)
+            self._h.wait()
+            time.sleep(0.1)
+            self._h.sync(d)
+            _log.debug('Unit restarted: %r:%r', unit, d)
+        else:
+            _log.info('Unable to reset %r', unit)
 
     def _resethub(self):
         """Clear passing history and reset attached decoders."""
@@ -1814,6 +1832,8 @@ class app(object):
                 self._resethub()
             else:
                 _log.warning('Invalid reset authorisation key')
+        elif req == 'resetunit':
+            self._resetunit(msg)
         elif req == 'timer':
             self._foreigntimer(msg)
         else:
