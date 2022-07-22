@@ -38,8 +38,8 @@ _MOTOPROX = 1.0
 _LOGDRIFT = 0.10
 # automatically isolate new passings ISOTHRESH newer than last processed pass
 _ISOTHRESH = tod.tod('30.0')
-# suppress gates older than maxelap
-_MAXELAP = tod.tod('10:00')
+# expire run time after this long idle
+_RUNIDLE = tod.tod('2:00')
 # choke queue for no longer than ISOMAXAGE ~ 35km/h over 50m
 _ISOMAXAGE = tod.tod('5.0')
 # start gate trigger correction
@@ -155,6 +155,26 @@ CONFIG_FLAGS = {
     CONFIG_TONE_BXX: 'BXX Tone',
     CONFIG_ACTIVE_LOOP: 'Active Loop',
     CONFIG_SPARE: '[spare]'
+}
+OFFLINE_STAT = {
+    "date": None,
+    "time": None,
+    "offset": None,
+    "env": None,
+    "count": None,
+    "battery": None,
+    "units": None,
+    "info": "error"
+}
+SHUTDOWN_STAT = {
+    "date": None,
+    "time": None,
+    "offset": None,
+    "env": None,
+    "count": None,
+    "battery": None,
+    "units": None,
+    "info": "offline"
 }
 
 
@@ -744,7 +764,6 @@ class app(object):
         self._t = telegraph()
         self._h = prohub()
         self._cbq = queue.Queue()
-        self._running = False
         self._cf = {}
         self._mps = {}
         self._mpnames = {}
@@ -761,6 +780,8 @@ class app(object):
         self._gatedelay = None  # delay time for gate trigger
         self._tomsrc = None  # top-of-minute actions are triggered by this mp
         self._gate = None  # last gate trigger
+        self._runstart = None  # start of current run
+        self._lastpass = None  # last accepted passing
         self._passq = {}  # passing queue buffer
         self._secmap = {}  # sector map for configured decoders
         self._syncmaster = None  # mpid of sync master unit
@@ -877,6 +898,10 @@ class app(object):
             raise RuntimeError('Invalid basetopic ' +
                                repr(self._cf['basetopic']) +
                                ', system inoperable')
+        # set a will for unexpected disconnect from broker
+        self._t.set_will_json(obj=OFFLINE_STAT,
+                              topic=self._statustopic,
+                              retain=True)
 
         # Add dhi output, if configured
         self._dhi = None
@@ -1066,6 +1091,9 @@ class app(object):
         gtime = None
         if self._gate is not None:
             gtime = self._gate.rawtime(places=2, zeros=True, hoursep=':')
+        stval = 'running'
+        if self._resetting:
+            stval = 'resetting'
         st = {
             'date': time.strftime('%F'),
             'time': nt.rawtime(places=2, zeros=True, hoursep=':'),
@@ -1075,6 +1103,7 @@ class app(object):
             'gate': gtime,
             'battery': [],
             'units': [],
+            'info': stval,
         }
         slog = [
             'Status Count:{} Offset:{}'.format(len(self._pstore),
@@ -1443,15 +1472,13 @@ class app(object):
                 # fetch sector data
                 sm = self._secmap[cid]
 
-                # check for start gate
+                # check runtime elapsed
                 elap = None
-                if self._gate is not None and self._gate < j:
-                    et = j - self._gate
-                    if et < _MAXELAP:
-                        elap = et.rawtime(2)
-                # fall back run start for elap
-                if elap is None and p['rs'] is not None:
-                    elap = (j - p['rs']).rawtime(2)
+                if self._runstart is not None and j >= self._runstart:
+                    if self._lastpass is not None and j >= self._lastpass:
+                        if j - self._lastpass < _RUNIDLE:
+                            elap = (j - self._runstart).rawtime(2)
+
                 # check moto proximity
                 moto = None
                 if cid in self._motos and self._motos[cid] is not None:
@@ -1498,6 +1525,10 @@ class app(object):
                 p[cid] = j
                 p['choke'] = None
 
+                # update lastpass if required
+                if self._lastpass is None or j > self._lastpass:
+                    self._lastpass = j
+
                 # issue to telegraph and continue
                 self._passing(po)
             else:
@@ -1508,15 +1539,26 @@ class app(object):
                     # fetch sector data
                     sm = self._secmap[cid]
 
-                    # reset runstart
+                    # reset own runstart
                     p['rs'] = None
 
-                    # check for start gate and moto proximity
+                    # expire shared runstart and reset as required
+                    if self._runstart is not None:
+                        if self._lastpass is None or (
+                                j > self._lastpass
+                                and j - self._lastpass >= _RUNIDLE):
+                            self._runstart = None
+                    if self._runstart is None:
+                        self._runstart = j
+
+                    # check runtime elapsed
                     elap = None
-                    if self._gate is not None and self._gate < j:
-                        et = j - self._gate
-                        if et < _MAXELAP:
-                            elap = et.rawtime(2)
+                    if self._runstart is not None and j >= self._runstart:
+                        if self._lastpass is not None and j >= self._lastpass:
+                            if j - self._lastpass < _RUNIDLE:
+                                elap = (j - self._runstart).rawtime(2)
+
+                    # check moto proximity
                     moto = None
                     if cid in self._motos and self._motos[cid] is not None:
                         mt = self._motos[cid]
@@ -1560,6 +1602,11 @@ class app(object):
                     p['lc'] = cid
                     p['rs'] = j
                     p[cid] = j
+
+                    # update last passing if required
+                    if self._lastpass is None or j > self._lastpass:
+                        self._lastpass = j
+
                     # don't unchoke yet - there may be multiple stale passes
                     # issue to all clients and continue
                     self._passing(po)
@@ -1598,11 +1645,13 @@ class app(object):
         """Insert a manual marker message into the passing list."""
         self._cleanqueues()
         nt = tod.now()
+
+        # check runtime elapsed
         elap = None
-        if self._gate is not None and self._gate < nt:
-            et = nt - self._gate
-            if et < _MAXELAP:
-                elap = et.rawtime(2)
+        if self._runstart is not None and nt >= self._runstart:
+            if self._lastpass is not None and nt >= self._lastpass:
+                if nt - self._lastpass < _RUNIDLE:
+                    elap = (nt - self._runstart).rawtime(2)
         po = {
             'index': None,
             'date': time.strftime('%F'),
@@ -1620,6 +1669,7 @@ class app(object):
             '50': None,
             'text': mark
         }
+        # markers do not extend runtime
         self._passing(po)
 
     def _systempass(self, t, chan):
@@ -1644,7 +1694,15 @@ class app(object):
             if chan == self._gatesrc:
                 self._cleanqueues()
                 _log.debug('Gate trigger: %s@%s', chan, t.rawtime(2))
+
+                # apply gate transponder delay to tod reading
                 self._gate = t - self._gatedelay
+
+                # gate trigger overrides run start and last passing
+                self._runstart = self._gate
+                if self._lastpass is None or self._runstart > self._lastpass:
+                    self._lastpass = self._runstart
+
                 po = {
                     'index': None,
                     'date': time.strftime('%F'),
@@ -1771,9 +1829,8 @@ class app(object):
         self._h.start()
 
         # loop on the cbq
-        self._running = True
         try:
-            while self._running:
+            while True:
                 m = self._cbq.get()
                 self._cbq.task_done()
                 if m[0] == 'RAWPASS':
@@ -1785,12 +1842,17 @@ class app(object):
                 else:
                     pass
         finally:
+            SHUTDOWN_STAT['time'] = tod.now().rawtime(2)
+            SHUTDOWN_STAT['date'] = time.strftime('%F')
+            self._t.publish_json(obj=SHUTDOWN_STAT,
+                                 topic=self._statustopic,
+                                 retain=True)
             self._y.exit()
             self._h.exit()
             self._t.exit()
+            self._t.join()
         self._y.join()
         self._h.join()
-        self._t.join()
         return 0
 
 
