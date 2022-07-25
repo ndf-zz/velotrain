@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "velotrain"
-version = "1.0.1dev5"
+version = "1.0.1"
 description = "Velodrome transponder training timing"
 readme = "README.md"
 requires-python = ">=3.6"
@@ -20,7 +20,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
 ]
 dependencies = [
-    "metarace>=2.0.2",
+    "metarace>2.0.1",
     "ypmeteo",
     "libscrc",
 ]

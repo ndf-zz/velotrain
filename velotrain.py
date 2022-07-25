@@ -926,6 +926,9 @@ class app(object):
             self._drifts[d] = tod.agg(0)
             self._motos[d] = None
         self._gate = None
+        self._motos = {}
+        self._runstart = None
+        self._lastpass = None
         self._passq = {}
 
         _log.debug('Loading track layout')
