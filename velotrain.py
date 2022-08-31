@@ -1461,7 +1461,10 @@ class app(object):
                 self._h.wait()
                 self._h.sync()
                 self._h.wait()
-                self._h.configset(d, {"Sync Pulse": True, "Active Loop": True})
+                self._h.configset(d, {
+                    "Sync Pulse": True,
+                    "Active Loop": False
+                })
                 self._h.wait()
                 ret = True
             else:
