@@ -767,6 +767,7 @@ class app(object):
         self._cbq = queue.Queue()
         self._cf = {}
         self._mps = {}
+        self._mpActive = set()
         self._mpnames = {}
         self._dhi = None
         self._secmap = {}
@@ -841,6 +842,7 @@ class app(object):
 
         # Determine which decoders are enabled
         self._mps = {}
+        self._mpActive = set()
         for i in range(1, 10):
             d = strops.id2chan(i)
             if d in self._cf['mps']:
@@ -852,6 +854,8 @@ class app(object):
                         self._mpnames[d] = d
                         if 'name' in split and isinstance(split['name'], str):
                             self._mpnames[d] = split['name']
+                    if 'active' in split and split['active']:
+                        self._mpActive.add(d)
 
         # Re-load track layout, splits and timing sectors - must be called
         # at least once before hub is started
@@ -1444,13 +1448,20 @@ class app(object):
             # set sync time on all slaved decoders
             confchg = {
                 "Sync Pulse": False,
+                "Active Loop": False,
                 "CELL Sync Hour": int(hr),
                 "CELL Sync Min": int(mn),
                 "CELL Sync": True
             }
             for mp in self._mps:
                 if mp != self._syncmaster:
+                    if mp in self._mpActive:
+                        confchg['Active Loop'] = True
+                    else:
+                        confchg['Active Loop'] = False
                     d = self._mps[mp]
+                    _log.debug('Active Loop option on %r: %r', mp,
+                               confchg['Active Loop'])
                     _log.debug('Udpate sync time on %r:%r', mp, d)
                     self._h.configset(d, confchg)
             if self._syncmaster is not None:
