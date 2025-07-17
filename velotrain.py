@@ -17,7 +17,8 @@ from metarace import tod
 from metarace import unt4
 from metarace import jsonconfig
 from metarace.telegraph import telegraph
-from libscrc import mcrf4xx
+from metarace.decoder.thbc import mcrf4xx
+from metarace.comet import Comet
 
 _LOGLEVEL = logging.DEBUG
 _log = logging.getLogger('velotrain')
@@ -63,7 +64,7 @@ _CONFIG = {
     'basetopic': 'velotrain',  # MQTT base topic
     'sync': None,  # channel of synchronisation master unit
     'authkey': None,  # optional reset auth key
-    'minspeed': 38.0,  # minimum sector speed
+    'minspeed': 30.0,  # minimum sector speed
     'maxspeed': 90.0,  # maximum sector speed
     'mingate': 9.0,  # minimum gate start sector speed
     'maxgate': 22.5,  # maximum gate start sector speed
@@ -109,6 +110,8 @@ LF = b'\x0a'
 SETTIME = ESCAPE + b'\x48'
 STATSTART = b'['
 PASSSTART = b'<'
+MINREFID = 90000
+MAXREFID = 150000
 
 # decoder config consts
 IPCONFIG_LEN = 16
@@ -210,7 +213,7 @@ class prounit(object):
         self.name = name
         self.unitno = None
         self.version = None
-        self.level = _PASSLEVEL
+        self.passlevel = _PASSLEVEL
         self.config = {}
         self.ipconfig = {}
         self.__hub = hub
@@ -224,7 +227,7 @@ class prounit(object):
 
     def __set_levels(self):
         """Set the Pass level on attached unit."""
-        lvl = '{0:02d}'.format(self.level).encode(THBC_ENCODING)
+        lvl = '{0:02d}'.format(self.passlevel).encode(THBC_ENCODING)
         self.__hub.sendto(STALVL + lvl, self.ip)
         self.__hub.sendto(BOXLVL + lvl, self.ip)
 
@@ -327,27 +330,48 @@ class prounit(object):
                     tsum = thbc_sum(data)
                     if tsum == msum:  # Valid 'sum'
                         pvec = data.decode(THBC_ENCODING).split()
-                        istr = pvec[3] + ':' + pvec[5]
-                        rstr = pvec[1].lstrip('0')
-                        cstr = 'C1'
-                        if pvec[0] == 'BOX':
-                            cstr = 'C2'
-                        elif pvec[0] == 'MAN':
-                            cstr = 'C0'
-                        t = tod.tod(pvec[2],
-                                    index=istr,
-                                    chan=cstr,
-                                    refid=rstr,
-                                    source=self.name)
-                        self.__hub.passing(t)
-                        if ack:
-                            self.__hub.ackpass(self.ip)
-                        self.__cksumerr = 0
-                        if pvec[5] == '3':
-                            _hlog.debug('%r Low battery on %r', self.ip, rstr)
-                            t.chan = 'BATT'
-                            self.__hub.statusack(t)
-                        ret = True
+                        istr = ':'.join(pvec[3:6])
+                        rawref = pvec[1]
+                        if rawref.isdigit():
+                            refint = int(rawref)
+                            if refint == 255 or (refint > MINREFID and
+                                                 refint < MAXREFID):  # trig
+                                rstr = rawref.lstrip('0')
+                                cstr = 'C1'
+                                if pvec[0] == 'BOX':
+                                    cstr = 'C2'
+                                elif pvec[0] == 'MAN':
+                                    cstr = 'C0'
+                                t = tod.tod(pvec[2],
+                                            index=istr,
+                                            chan=cstr,
+                                            refid=rstr,
+                                            source=self.name)
+                                self.__hub.passing(t)
+                                if ack:
+                                    self.__hub.ackpass(self.ip)
+                                self.__cksumerr = 0
+                                if pvec[5] == '2':
+                                    _hlog.info('%r Low battery on %r', self.ip,
+                                               rstr)
+                                    t.chan = 'BATT'
+                                    self.__hub.statusack(t)
+                                elif pvec[5] == '3':
+                                    _hlog.warning('%r Faulty battery on %r',
+                                                  self.ip, rstr)
+                                    t.chan = 'BATT'
+                                    self.__hub.statusack(t)
+                                ret = True
+                            else:
+                                _hlog.info('%r ignored spurious refid: %r',
+                                           self.ip, rawref)
+                                if ack:
+                                    self.__hub.ackpass(self.ip)
+                        else:
+                            _hlog.info('%r ignored spurious refid: %r',
+                                       self.ip, rawref)
+                            if ack:
+                                self.__hub.ackpass(self.ip)
                     else:
                         _hlog.warning('%r invalid checksum: %r != %r: %r',
                                       self.ip, tsum, msum, msg)
@@ -416,6 +440,7 @@ class prohub(threading.Thread):
         self.portno = 2008
         self.ipaddr = ''
         self.broadcast = '255.255.255.255'
+        self.passlevel = _PASSLEVEL
         self.rdbuf = {}  # per unit read buffers
         self.cqueue = queue.Queue()  # command queue
         self.running = False
@@ -431,6 +456,7 @@ class prohub(threading.Thread):
         """Add or replace a connection to the unit at the given IP."""
         self.__remove(ip)
         self.hub[ip] = prounit(ip, name, self)
+        self.hub[ip].passlevel = self.passlevel
         _hlog.debug('Add unit: %r:%r', ip, name)
         self.__write(QUECMD, ip)
 
@@ -761,6 +787,7 @@ class app(object):
     """Velotrain application object."""
 
     def __init__(self):
+        self._c = Comet()
         self._y = ypmeteo()
         self._t = telegraph()
         self._h = prohub()
@@ -811,7 +838,10 @@ class app(object):
     def _env(self):
         """Return an environment tuple (t, h, p) if available, or None."""
         ret = None
-        if self._y.connected():
+        if self._c.valid():
+            ret = (self._c.t, self._c.h, self._c.p)
+        elif self._y.connected():
+            _log.debug('Comet unavailable - using Meteo')
             ret = (self._y.t, self._y.h, self._y.p)
         return ret
 
@@ -836,9 +866,10 @@ class app(object):
         self._cf = cf.dictcopy()['velotrain']
 
         # Setup hub details
-        self._h.broadcast = self._cf[u'bcast']
-        self._h.ipaddr = self._cf[u'uaddr']
-        self._h.portno = self._cf[u'uport']
+        self._h.broadcast = self._cf['bcast']
+        self._h.ipaddr = self._cf['uaddr']
+        self._h.portno = self._cf['uport']
+        self._h.passlevel = self._cf['passlevel']
 
         # Determine which decoders are enabled
         self._mps = {}
@@ -979,7 +1010,7 @@ class app(object):
         last = None
         first = None
         prev = None
-        # only confiugured mps listed in the sequence will be used as splits
+        # only configured mps listed in the sequence will be used as splits
         for d in self._cf['mpseq']:
             if d in self._mps:
                 # d is a configured measurement point, add to map
@@ -1203,6 +1234,7 @@ class app(object):
             'refid': t.refid,
             'mpid': mpid,
             'name': cname,
+            'info': t.index,
             'time': t.rawtime(places=3, zeros=True, hoursep=':'),
             'rcv': nt.rawtime(places=3, zeros=True, hoursep=':'),
         }
@@ -1217,7 +1249,7 @@ class app(object):
             self._systempass(t, cid)
         else:
             # process moto as system pass then overwrite refid
-            if t.refid in self._cf[u'moto']:
+            if t.refid in self._cf['moto']:
                 self._systempass(t, cid)
                 t.refid = 'moto'
             ps = self._prepareq(t.refid)
@@ -1230,11 +1262,11 @@ class app(object):
         """Send non-critical environment data to DHI scoreboard."""
         if self._dhi is not None:
             try:
-                if self._y.connected():
+                if self._c.valid():
                     enc = self._cf['dhiencoding']
-                    tv = '{0:0.1f}'.format(self._y.t)
-                    hv = '{0:0.0f}'.format(self._y.h)
-                    pv = '{0:0.0f}'.format(self._y.p)
+                    tv = '{0:0.1f}'.format(self._c.t)
+                    hv = '{0:0.0f}'.format(self._c.h)
+                    pv = '{0:0.0f}'.format(self._c.p)
                     msg = ''.join((unt4.unt4(header='DC', text=tv).pack(),
                                    unt4.unt4(header='RH', text=hv).pack(),
                                    unt4.unt4(header='BP', text=pv).pack()))
@@ -1245,7 +1277,7 @@ class app(object):
                     s.shutdown(socket.SHUT_RDWR)
                     s.close()
                 else:
-                    _log.debug('Environment probe not connected')
+                    _log.debug('Comet data not available')
             except Exception as e:
                 _log.debug('%s sending to DHI %r: %s', e.__class__.__name__,
                            self._dhi, e)
@@ -1504,7 +1536,7 @@ class app(object):
             mpid = strops.chan2id(cid)
             cname = self._mpnames[cid]
             if self._sector_match(cid, j, p):
-                _log.debug(u'Sector match %r: %s@%s', refid, cid, j.rawtime(2))
+                _log.debug('Sector match %r: %s@%s', refid, cid, j.rawtime(2))
                 # fetch sector data
                 sm = self._secmap[cid]
 
@@ -1513,7 +1545,7 @@ class app(object):
                 if self._runstart is not None and j >= self._runstart:
                     if self._lastpass is not None and j >= self._lastpass:
                         if j - self._lastpass < _RUNIDLE:
-                            elap = (j - self._runstart).rawtime(2)
+                            elap = (j - self._runstart).round(2).rawtime(2)
 
                 # check moto proximity
                 moto = None
@@ -1524,11 +1556,11 @@ class app(object):
                                j.rawtime(4), mt.rawtime(4), dt.rawtime(4),
                                dt.__class__.__name__)
                     if dt > -0.1 and dt < _MOTOPROX:
-                        moto = dt.rawtime(2)
+                        moto = dt.round(2).rawtime(2)
                 po = {
                     'index': None,
                     'date': time.strftime('%F'),
-                    'time': j.rawtime(places=2, zeros=True, hoursep=':'),
+                    'time': j.rawtime(places=3, zeros=True, hoursep=':'),
                     'mpid': mpid,
                     'refid': refid,
                     'env': self._env(),
@@ -1548,7 +1580,7 @@ class app(object):
                         spsrc = sm[split]
                         sc = spsrc['src']
                         if sc in p and p[sc] is not None:
-                            selp = j - p[sc]
+                            selp = (j - p[sc]).round(2)
                             if selp > spsrc['min'] and selp < spsrc['max']:
                                 po[split] = str(selp.as_seconds(2))
 
@@ -1570,7 +1602,7 @@ class app(object):
             else:
                 # the head of the queue doesn't match required data
                 if self._isolated_match(cid, j, p):
-                    _log.debug(u'Isolated match %r: %s@%s', refid, cid,
+                    _log.debug('Isolated match %r: %s@%s', refid, cid,
                                j.rawtime(2))
                     # fetch sector data
                     sm = self._secmap[cid]
@@ -1592,7 +1624,7 @@ class app(object):
                     if self._runstart is not None and j >= self._runstart:
                         if self._lastpass is not None and j >= self._lastpass:
                             if j - self._lastpass < _RUNIDLE:
-                                elap = (j - self._runstart).rawtime(2)
+                                elap = (j - self._runstart).round(2).rawtime(2)
 
                     # check moto proximity
                     moto = None
@@ -1607,7 +1639,7 @@ class app(object):
                     po = {
                         'index': None,
                         'date': time.strftime('%F'),
-                        'time': j.rawtime(places=2, zeros=True, hoursep=':'),
+                        'time': j.rawtime(places=3, zeros=True, hoursep=':'),
                         'mpid': mpid,
                         'refid': refid,
                         'env': self._env(),
@@ -1627,7 +1659,7 @@ class app(object):
                             spsrc = sm[split]
                             sc = spsrc['src']
                             if sc in p and p[sc] is not None:
-                                selp = j - p[sc]
+                                selp = (j - p[sc]).round(2)
                                 if selp > spsrc['min'] and selp < spsrc['max']:
                                     po[split] = str(selp.as_seconds(2))
                     # remove first from queue
@@ -1647,7 +1679,7 @@ class app(object):
                     # issue to all clients and continue
                     self._passing(po)
                 else:
-                    _log.debug(u'Queue choked %r: %s@%s', refid, cid,
+                    _log.debug('Queue choked %r: %s@%s', refid, cid,
                                j.rawtime(2))
                     p['choke'] = cid
                     break
@@ -1691,7 +1723,7 @@ class app(object):
         po = {
             'index': None,
             'date': time.strftime('%F'),
-            'time': nt.rawtime(places=2, zeros=True, hoursep=':'),
+            'time': nt.rawtime(places=3, zeros=True, hoursep=':'),
             'mpid': 0,
             'refid': 'marker',
             'env': self._env(),
@@ -1742,7 +1774,7 @@ class app(object):
                 po = {
                     'index': None,
                     'date': time.strftime('%F'),
-                    'time': self._gate.rawtime(places=2,
+                    'time': self._gate.rawtime(places=3,
                                                zeros=True,
                                                hoursep=':'),
                     'mpid': 0,
@@ -1816,7 +1848,7 @@ class app(object):
         """Read in a telegraphed timer message."""
         # 'INDEX;SOURCE;CHANNEL;REFID;TIMEOFDAY'
         t = None
-        tv = msg.split(u';')
+        tv = msg.split(';')
         if len(tv) == 5:
             t = tod.mktod(tv[4])
         if t is not None:
@@ -1866,6 +1898,7 @@ class app(object):
 
         # start threads
         self._y.start()
+        self._c.start()
         self._t.start()
         self._h.start()
 
@@ -1895,11 +1928,11 @@ class app(object):
                                  topic=self._statustopic,
                                  retain=True)
             self._y.exit()
+            self._c.exit()
             self._h.exit()
             self._t.wait()
             self._t.exit()
             self._t.join()
-        self._y.join()
         self._h.join()
         return 0
 

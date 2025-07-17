@@ -18,7 +18,7 @@ by measurement points at each of the interesting offsets, for example:
 
 A rider is considered to be in a 'run' if their speed over any
 configured sector (eg Finish line to 200m start) is between
-configured values (default: 38 km/h to 90 km/h).
+configured values (default: 30 km/h to 90 km/h).
 Passings emitted for a rider in a run will include any available
 lap, half-lap, quarter-lap, 100 m, and 50 m splits.
 Rider passings slower or faster than the configured limits are
@@ -119,7 +119,7 @@ are JSON encoded objects with the following properties:
 
    - index : (integer) index of the passing record (reset to 0 each day)
    - date: (string) Date of the passing formatted YYYY-MM-DD
-   - time: (string) Time of day of the passing formatted HH:MM:SS.dc
+   - time: (string) Time of day of the passing formatted HH:MM:SS.dcm
    - mpid: (integer) Measurement point ID 0 - 9
    - refid: (string) Transponder ID or system passing ID 'gate', 'moto'
      or 'marker'
@@ -141,7 +141,7 @@ Example: A moto passing over the 100m split at about 4:18pm
 
 	Topic:		velotrain/passing
 	Payload:	{"index": 108, "date": "2022-07-06",
-			 "time": "16:18:32.30", "mpid": 5,
+			 "time": "16:18:32.300", "mpid": 5,
 			 "refid": "moto", "env": [16.3, 55.0, 1015.0],
 			 "moto": "0.00", "elap": "2:10.51",
 			 "lap": "22.95", "half": null, "qtr": null,
@@ -156,12 +156,13 @@ passing records are JSON encoded objects with the following properties:
    - date: (string) Date of the raw passing formatted YYYY-MM-DD
    - time: (string) Time of day of the passing formatted HH:MM:SS.dc
    - rcv: (string) Time of day passing was received by host system,
-     formatted HH:MM:SS.dc
+     formatted HH:MM:SS.dcm
    - mpid: (integer) Measurement point ID 0 - 9
    - refid: (string) Raw transponder ID
    - env: (list) [temperature, humidity, pressure] where each value
      is a float value in units degrees Celsius, %rh, and hPa respectively
    - name: (string) Name of measurement point
+   - info: (string) Extra information provided by decoder
 
 Example: The raw passing that might have generated the above moto passing
 
@@ -383,7 +384,7 @@ Example: Reset unit "C4"
 
 ## Requirements
 
-   - metarace (>= 2.0)
+   - metarace (>= 2.1.14)
    - ypmeteo
 
 
