@@ -840,8 +840,12 @@ class app(object):
         ret = None
         if self._c.valid():
             ret = (self._c.t, self._c.h, self._c.p)
+            if self._y.connected():
+                _log.info('Weather: %r',
+                          (time.time(), self._c.t, self._c.h, self._c.p,
+                           self._y.t, self._y.h, self._y.p))
         elif self._y.connected():
-            _log.debug('Comet unavailable - using Meteo')
+            _log.debug('Comet unavailable - fallback to Meteo')
             ret = (self._y.t, self._y.h, self._y.p)
         return ret
 
