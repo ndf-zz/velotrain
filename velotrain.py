@@ -1,4 +1,6 @@
 """Velodrome Transponder Training Timing"""
+__version__ = '1.0.3'
+
 import logging
 import os
 import sys
